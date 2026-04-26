@@ -600,10 +600,10 @@ class CommandHandlers(BaseHandler):
                     # override the user's new cwd
                     sessions = getattr(session_handler, "sessions", None)
                     if sessions:
-                        sessions.set_agent_session_working_path(
+                        sessions._set_agent_session_working_path(
                             session_key,
-                            session_handler.get_base_session_id(context),
                             "claude",
+                            session_handler.get_base_session_id(context),
                             absolute_path,
                         )
                     # Remove cached Claude client for the old composite key

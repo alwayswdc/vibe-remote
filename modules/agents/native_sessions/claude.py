@@ -24,21 +24,6 @@ def _norm_path(p: str) -> str:
     return os.path.normcase(os.path.normpath(p))
 
 
-def _path_matches(working_path: str, session_path: str) -> bool:
-    """Check if a session's path is compatible with the requested working_path.
-
-    Matches when paths are equal, or when one is an ancestor of the other.
-    This handles the case where a user /setcwd to a subdirectory but Claude
-    Code stored the session under the parent project directory.
-    """
-    nw = _norm_path(working_path)
-    ns = _norm_path(session_path)
-    if nw == ns:
-        return True
-    # Check ancestor relationship: nw starts with ns/ or ns starts with nw/
-    return nw.startswith(ns + os.sep) or ns.startswith(nw + os.sep)
-
-
 def encode_project_path(working_path: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", working_path)
 
@@ -133,7 +118,7 @@ class ClaudeNativeSessionProvider(NativeSessionProvider):
     ) -> str | None:
         session_id = str(entry.get("sessionId") or "").strip()
         project_path = str(entry.get("projectPath") or "").strip()
-        if not session_id or not _path_matches(working_path, project_path):
+        if not session_id or _norm_path(project_path) != _norm_path(working_path):
             return None
         created_at = self._parse_iso(entry.get("created"))
         updated_at = self._parse_iso(entry.get("modified"))
@@ -164,7 +149,7 @@ class ClaudeNativeSessionProvider(NativeSessionProvider):
         for row in read_json_lines(self.history_path):
             project_path = str(row.get("project") or "").strip()
             session_id = str(row.get("sessionId") or "").strip()
-            if not _path_matches(working_path, project_path) or not session_id:
+            if _norm_path(project_path) != _norm_path(working_path) or not session_id:
                 continue
             updated_at = dt_from_ts(row.get("timestamp"), millis=True)
             sort_ts = updated_at.timestamp() if updated_at else 0.0
@@ -220,7 +205,7 @@ class ClaudeNativeSessionProvider(NativeSessionProvider):
             row_cwd = str(row.get("cwd") or row.get("projectPath") or "").strip()
             if row_cwd:
                 inferred_working_path = row_cwd
-            if _path_matches(working_path, row_cwd):
+            if _norm_path(row_cwd) == _norm_path(working_path):
                 matched_working_path = True
             if row.get("type") == "user" and not first_prompt:
                 first_prompt = str((row.get("message") or {}).get("content") or "")
