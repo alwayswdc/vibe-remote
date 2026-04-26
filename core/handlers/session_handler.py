@@ -15,6 +15,12 @@ from .base import BaseHandler
 
 logger = logging.getLogger(__name__)
 
+
+def _norm_path(p: str) -> str:
+    """Normalize path for comparison: resolve case and separators."""
+    return os.path.normcase(os.path.normpath(p))
+
+
 CLAUDE_NO_CONVERSATION_RE = re.compile(r"No conversation found with session ID:\s*(\S+)")
 
 
@@ -404,10 +410,10 @@ class SessionHandler(BaseHandler):
         session_key = self._get_session_key(context)
         stored_claude_session_id = self.sessions.get_claude_session_id(session_key, base_session_id)
 
-        # For cross-project resumed sessions, use the stored working_path
-        # as cwd so Claude Code can find the session file.
+        # Use stored_working_path only when it matches the user's current cwd.
+        # If the user changed cwd via /setcwd, respect the new path instead.
         stored_working_path = self.sessions.get_agent_session_working_path(session_key, base_session_id, agent_name="claude")
-        if stored_working_path and stored_claude_session_id:
+        if stored_working_path and stored_claude_session_id and _norm_path(stored_working_path) == _norm_path(working_path):
             logger.info(f"Using stored working_path for resumed session: {stored_working_path} (current: {working_path})")
             working_path = stored_working_path
 

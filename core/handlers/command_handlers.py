@@ -16,6 +16,11 @@ from .base import BaseHandler
 logger = logging.getLogger(__name__)
 
 
+def _norm_path(p: str) -> str:
+    """Normalize path for comparison: resolve case and separators."""
+    return os.path.normcase(os.path.normpath(p))
+
+
 class CommandHandlers(BaseHandler):
     """Handles all bot command operations"""
 
@@ -582,7 +587,38 @@ class CommandHandlers(BaseHandler):
 
             # Save to user settings
             settings_key = self._get_settings_key(context)
+            old_cwd = self.controller.get_cwd(context)
             settings_manager.set_custom_cwd(settings_key, absolute_path)
+
+            # If cwd actually changed, clear cached Claude sessions so the
+            # next message creates a new session with the updated cwd.
+            if _norm_path(old_cwd) != _norm_path(absolute_path):
+                session_handler = getattr(self.controller, "session_handler", None)
+                if session_handler:
+                    session_key = session_handler._get_session_key(context)
+                    # Clear stored session working_path so resume doesn't
+                    # override the user's new cwd
+                    sessions = getattr(session_handler, "sessions", None)
+                    if sessions:
+                        sessions.set_agent_session_working_path(
+                            session_key,
+                            session_handler.get_base_session_id(context),
+                            "claude",
+                            absolute_path,
+                        )
+                    # Remove cached Claude client for the old composite key
+                    old_composite = f"{session_handler.get_base_session_id(context)}:{old_cwd}"
+                    old_client = session_handler.claude_sessions.pop(old_composite, None)
+                    if old_client:
+                        logger.info(f"Removed cached Claude session for old cwd: {old_composite}")
+                        try:
+                            old_client.close()
+                        except Exception:
+                            pass
+                    old_receiver = session_handler.receiver_tasks.pop(old_composite, None)
+                    if old_receiver and not old_receiver.done():
+                        old_receiver.cancel()
+                    session_handler.clear_session_tracking(old_composite)
 
             logger.info(f"User {context.user_id} changed cwd to: {absolute_path}")
 
