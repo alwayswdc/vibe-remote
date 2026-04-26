@@ -390,7 +390,7 @@ class SettingsHandler(BaseHandler):
             logger.error(f"Error in handle_info_how_it_works: {e}", exc_info=True)
             await self._get_im_client(context).send_message(context, f"❌ {self._t('error.helpInfoFailed')}")
 
-    async def handle_routing(self, context: MessageContext):
+    async def handle_routing(self, context: MessageContext, args: str = ""):
         """Handle routing command - show agent/model selection"""
         try:
             platform = context.platform or (context.platform_specific or {}).get("platform") or self.config.platform
