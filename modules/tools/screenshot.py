@@ -48,7 +48,8 @@ def _save_cropped_image(full_img, left: int, top: int, right: int, bottom: int, 
         img.save(filepath, "PNG")
         return True
     except ImportError:
-        mss.tools.to_png(rgb_data.tobytes(), (crop_w, crop_h), output=filepath)
+        import mss as _mss
+        _mss.tools.to_png(rgb_data.tobytes(), (crop_w, crop_h), output=filepath)
         # Verify the file was created and is not a degenerate PNG
         if os.path.getsize(filepath) < 100:
             logger.error(f"Generated PNG is too small ({os.path.getsize(filepath)} bytes), likely invalid")
@@ -101,10 +102,7 @@ def capture_screenshot(monitor: int = 1) -> str | None:
 
 def capture_active_window() -> str | None:
     """Capture the currently focused application window. Returns file path or None."""
-    try:
-        import ctypes
-        import ctypes.wintypes
-    except ImportError:
+    if os.name != "nt":
         return _capture_active_window_linux()
 
     ensure_screenshot_dir()
@@ -245,16 +243,15 @@ def _capture_active_window_linux() -> str | None:
         if result.returncode != 0:
             raise ScreenshotError("xdotool failed to get active window geometry")
 
-        # Parse output: Position: X,Y (WxH)
+        # Parse output: Position: X,Y (screen: N)  and  Geometry: WxH
         left = top = width = height = 0
         for line in result.stdout.splitlines():
             if "Position" in line:
-                parts = line.split()
-                pos = parts[1].split(",")
-                geom = parts[2].replace("(", "").replace(")", "").split("x")
-                left, top = int(pos[0]), int(pos[1])
-                width, height = int(geom[0]), int(geom[1])
-                break
+                pos_part = line.split()[1]
+                left, top = int(pos_part.split(",")[0]), int(pos_part.split(",")[1])
+            if "Geometry" in line:
+                geom_part = line.split()[1]
+                width, height = int(geom_part.split("x")[0]), int(geom_part.split("x")[1])
 
         # Convert logical coords to physical pixels for mss
         left, top, right, bottom = _linux_logical_to_physical(
@@ -262,12 +259,15 @@ def _capture_active_window_linux() -> str | None:
         )
 
         import mss
+        import numpy as np
         ensure_screenshot_dir()
         filepath = os.path.join(SCREENSHOT_DIR, f"window_{_timestamp()}.png")
         with mss.MSS() as sct:
-            monitor = {"left": left, "top": top, "width": right - left, "height": bottom - top}
-            shot = sct.grab(monitor)
-            mss.tools.to_png(shot.rgb, shot.size, output=filepath)
+            full_shot = sct.grab(sct.monitors[1])
+            full_img = np.array(full_shot)
+            if not _save_cropped_image(full_img, left, top, right, bottom, filepath):
+                raise ScreenshotError("Failed to save window screenshot")
+            logger.info(f"Active window screenshot saved: {filepath}")
             return filepath
     except ScreenshotError:
         raise
@@ -311,10 +311,7 @@ def list_windows() -> list[dict]:
     Only returns windows that are on-screen (not minimized/hidden).
     Returns coordinates in physical pixels (converted from logical via DPI scale).
     """
-    try:
-        import ctypes
-        import ctypes.wintypes
-    except ImportError:
+    if os.name != "nt":
         return _list_windows_linux()
 
     windows = []
@@ -374,7 +371,7 @@ def _list_windows_linux() -> list[dict]:
     try:
         import subprocess
         result = subprocess.run(
-            ["xdotool", "search", "--name", ""],
+            ["xdotool", "search", "--name", "."],
             capture_output=True, text=True, timeout=5,
         )
         windows = []
@@ -382,12 +379,61 @@ def _list_windows_linux() -> list[dict]:
             wid = wid.strip()
             if not wid:
                 continue
+            try:
+                wid_int = int(wid)
+            except ValueError:
+                continue
+            # Skip root window (WID < 1000 typically) and system windows
+            if wid_int < 1000:
+                continue
+            # Check _NET_WM_WINDOW_TYPE to only include normal windows
+            try:
+                type_result = subprocess.run(
+                    ["xprop", "-id", wid, "_NET_WM_WINDOW_TYPE"],
+                    capture_output=True, text=True, timeout=2,
+                )
+                if type_result.returncode != 0:
+                    continue
+                type_str = type_result.stdout.strip()
+                if "_NET_WM_WINDOW_TYPE_NORMAL" not in type_str:
+                    continue
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                # xprop not available; fall through to geometry check
+                pass
             name_result = subprocess.run(
                 ["xdotool", "getwindowname", wid],
                 capture_output=True, text=True, timeout=2,
             )
-            if name_result.returncode == 0 and name_result.stdout.strip():
-                windows.append({"hwnd": int(wid), "title": name_result.stdout.strip()})
+            if name_result.returncode != 0 or not name_result.stdout.strip():
+                continue
+            title = name_result.stdout.strip()
+            # Get window geometry
+            geom_result = subprocess.run(
+                ["xdotool", "getwindowgeometry", wid],
+                capture_output=True, text=True, timeout=2,
+            )
+            left = top = width = height = 0
+            if geom_result.returncode == 0:
+                for line in geom_result.stdout.splitlines():
+                    if "Position" in line:
+                        pos_part = line.split()[1]
+                        left, top = int(pos_part.split(",")[0]), int(pos_part.split(",")[1])
+                    if "Geometry" in line:
+                        geom_part = line.split()[1]
+                        width, height = int(geom_part.split("x")[0]), int(geom_part.split("x")[1])
+            # Skip off-screen / minimized / tiny windows
+            if left < -10000 or top < -10000:
+                continue
+            if width < 50 or height < 50:
+                continue
+            windows.append({
+                "hwnd": wid_int,
+                "title": title,
+                "left": left,
+                "top": top,
+                "width": width,
+                "height": height,
+            })
         return windows
     except Exception:
         return []
@@ -399,10 +445,7 @@ def capture_window_by_hwnd(hwnd: int) -> str | None:
     More reliable than title-based capture because window titles can change
     dynamically (e.g. Claude Code spinner animation).
     """
-    try:
-        import ctypes
-        import ctypes.wintypes
-    except ImportError:
+    if os.name != "nt":
         return _capture_window_by_wid_linux(hwnd)
 
     try:
@@ -451,10 +494,7 @@ def capture_window_by_title(title: str) -> str | None:
     Prefer capture_window_by_hwnd() when the HWND is known, as window titles
     can change dynamically (e.g. spinner animations).
     """
-    try:
-        import ctypes
-        import ctypes.wintypes
-    except ImportError:
+    if os.name != "nt":
         return _capture_window_by_title_linux(title)
 
     try:
@@ -474,7 +514,11 @@ def capture_window_by_title(title: str) -> str | None:
 
 
 def _capture_window_by_wid_linux(wid: int) -> str | None:
-    """Capture a specific window by its window ID on Linux using xdotool + mss."""
+    """Capture a specific window by its window ID on Linux using xdotool + mss.
+
+    Uses fullscreen capture + crop instead of mss region grab to avoid
+    X11 Protocol Errors on special windows (root window, system overlays).
+    """
     if not _check_xdotool():
         raise ScreenshotError("xdotool not installed. Install: sudo apt install xdotool")
     try:
@@ -489,11 +533,11 @@ def _capture_window_by_wid_linux(wid: int) -> str | None:
         left = top = width = height = 0
         for line in geom_result.stdout.splitlines():
             if "Position" in line:
-                parts = line.split()
-                pos = parts[1].split(",")
-                geom = parts[2].replace("(", "").replace(")", "").split("x")
-                left, top = int(pos[0]), int(pos[1])
-                width, height = int(geom[0]), int(geom[1])
+                pos_part = line.split()[1]
+                left, top = int(pos_part.split(",")[0]), int(pos_part.split(",")[1])
+            if "Geometry" in line:
+                geom_part = line.split()[1]
+                width, height = int(geom_part.split("x")[0]), int(geom_part.split("x")[1])
 
         if width <= 0 or height <= 0:
             raise ScreenshotError(f"Invalid window dimensions for WID {wid}: {width}x{height}")
@@ -502,16 +546,18 @@ def _capture_window_by_wid_linux(wid: int) -> str | None:
         p_left, p_top, p_right, p_bottom = _linux_logical_to_physical(
             left, top, left + width, top + height,
         )
-        p_width = p_right - p_left
-        p_height = p_bottom - p_top
 
         import mss
+        import numpy as np
         ensure_screenshot_dir()
         filepath = os.path.join(SCREENSHOT_DIR, f"window_{_timestamp()}.png")
         with mss.MSS() as sct:
-            monitor = {"left": p_left, "top": p_top, "width": p_width, "height": p_height}
-            shot = sct.grab(monitor)
-            mss.tools.to_png(shot.rgb, shot.size, output=filepath)
+            # Grab the primary monitor (fullscreen) then crop
+            full_shot = sct.grab(sct.monitors[1])
+            full_img = np.array(full_shot)
+            if not _save_cropped_image(full_img, p_left, p_top, p_right, p_bottom, filepath):
+                raise ScreenshotError("Failed to save window screenshot")
+            logger.info(f"Window screenshot saved (WID {wid}): {filepath}")
             return filepath
     except ScreenshotError:
         raise
@@ -536,11 +582,11 @@ def _capture_window_by_title_linux(title: str) -> str | None:
         left = top = width = height = 0
         for line in geom_result.stdout.splitlines():
             if "Position" in line:
-                parts = line.split()
-                pos = parts[1].split(",")
-                geom = parts[2].replace("(", "").replace(")", "").split("x")
-                left, top = int(pos[0]), int(pos[1])
-                width, height = int(geom[0]), int(geom[1])
+                pos_part = line.split()[1]
+                left, top = int(pos_part.split(",")[0]), int(pos_part.split(",")[1])
+            if "Geometry" in line:
+                geom_part = line.split()[1]
+                width, height = int(geom_part.split("x")[0]), int(geom_part.split("x")[1])
 
         # Convert logical coords to physical pixels for mss
         p_left, p_top, p_right, p_bottom = _linux_logical_to_physical(
@@ -550,12 +596,15 @@ def _capture_window_by_title_linux(title: str) -> str | None:
         p_height = p_bottom - p_top
 
         import mss
+        import numpy as np
         ensure_screenshot_dir()
         filepath = os.path.join(SCREENSHOT_DIR, f"window_{_timestamp()}.png")
         with mss.MSS() as sct:
-            monitor = {"left": p_left, "top": p_top, "width": p_width, "height": p_height}
-            shot = sct.grab(monitor)
-            mss.tools.to_png(shot.rgb, shot.size, output=filepath)
+            full_shot = sct.grab(sct.monitors[1])
+            full_img = np.array(full_shot)
+            if not _save_cropped_image(full_img, p_left, p_top, p_right, p_bottom, filepath):
+                raise ScreenshotError("Failed to save window screenshot")
+            logger.info(f"Window screenshot saved ({title}): {filepath}")
             return filepath
     except ScreenshotError:
         raise
