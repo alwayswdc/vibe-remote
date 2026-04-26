@@ -9,6 +9,7 @@ from modules.agents import get_agent_display_name
 from modules.agents.native_sessions.types import NativeResumeSession
 from modules.agents.base import AgentRequest
 from modules.im import MessageContext, InlineKeyboard, InlineButton
+from modules.tools.screenshot import capture_screenshot, capture_active_window, capture_window_by_title, capture_window_by_hwnd, list_windows, cleanup_old_screenshots, ScreenshotError
 
 from .base import BaseHandler
 
@@ -119,9 +120,6 @@ class CommandHandlers(BaseHandler):
         if time.time() - float(snapshot.get("stored_at", 0.0)) > self._resume_snapshot_ttl_seconds:
             self._resume_snapshots.pop(self._get_resume_snapshot_key(context), None)
             return None
-        if snapshot.get("working_path") != self.controller.get_cwd(context):
-            self._resume_snapshots.pop(self._get_resume_snapshot_key(context), None)
-            return None
         return snapshot
 
     def _list_recent_native_sessions(
@@ -138,7 +136,7 @@ class CommandHandlers(BaseHandler):
             native_session_service = getattr(self.controller, "native_session_service", None)
         if native_session_service is None:
             return working_path, []
-        sessions = native_session_service.list_recent_sessions(working_path, limit=limit)
+        sessions = native_session_service.list_all_recent_sessions(limit=limit)
         agent_service = getattr(self.controller, "agent_service", None)
         registered_agents = getattr(agent_service, "agents", None)
         if isinstance(registered_agents, dict) and registered_agents:
@@ -272,6 +270,7 @@ class CommandHandlers(BaseHandler):
             host_message_ts=context.message_id,
             is_dm=bool((context.platform_specific or {}).get("is_dm", False)),
             platform=context.platform or (context.platform_specific or {}).get("platform") or self.config.platform,
+            session_working_path=item.working_path,
         )
 
     async def _handle_wechat_resume_latest(self, context: MessageContext, *, agent: Optional[str] = None) -> None:
@@ -298,6 +297,7 @@ class CommandHandlers(BaseHandler):
             host_message_ts=context.message_id,
             is_dm=bool((context.platform_specific or {}).get("is_dm", False)),
             platform=context.platform or (context.platform_specific or {}).get("platform") or self.config.platform,
+            session_working_path=item.working_path,
         )
 
     async def _handle_wechat_resume(self, context: MessageContext, args: str) -> None:
@@ -456,8 +456,12 @@ class CommandHandlers(BaseHandler):
                 InlineButton(text=f"⏮️ {self._t('button.resumeSession')}", callback_data="cmd_resume"),
                 InlineButton(text=f"🤖 {self._t('button.agentSettings')}", callback_data="cmd_routing"),
             ],
-            # Row 4: Features
-            [InlineButton(text=f"✨ {self._t('button.howItWorks')}", callback_data="info_how_it_works")],
+            # Row 4: Screenshot + Features
+            [
+                InlineButton(text="📸 Screenshot", callback_data="cmd_screenshot"),
+                InlineButton(text="🪟 Window", callback_data="cmd_screenshot_window"),
+                InlineButton(text=f"✨ {self._t('button.howItWorks')}", callback_data="info_how_it_works"),
+            ],
         ]
 
         keyboard = InlineKeyboard(buttons=buttons)
@@ -937,4 +941,90 @@ class CommandHandlers(BaseHandler):
             await im_client.send_message(
                 context,  # Use original context
                 f"❌ {self._t('error.stopFailed', error=str(e))}",
+            )
+
+    async def handle_screenshot(self, context: MessageContext, args: str = ""):
+        """Handle /screenshot command - capture a screenshot and send it to the user.
+
+        /screenshot         - capture full screen
+        /screenshot window  - capture active window
+        /screenshot pick    - show window picker (IM platforms with inline buttons)
+        /screenshot <title> - capture window matching title
+        """
+        try:
+            cleanup_old_screenshots()
+            args = args.strip()
+
+            # "pick" mode: show window list as inline buttons
+            if args.lower() == "pick":
+                im_client = self._get_im_client(context)
+                channel_context = self._get_channel_context(context)
+                windows = list_windows()
+                visible = [w for w in windows if w.get("title") and w.get("width", 0) > 0][:10]
+                if not visible:
+                    await im_client.send_message(channel_context, "No visible windows found.")
+                    return
+                rows = []
+                for w in visible:
+                    label = w["title"][:30]
+                    rows.append([InlineButton(text=f"🪟 {label}", callback_data=f"cmd_screenshot_hwnd:{w['hwnd']}")])
+                rows.append([
+                    InlineButton(text="🖥 Full Screen", callback_data="cmd_screenshot"),
+                    InlineButton(text="✖️ Cancel", callback_data="cmd_screenshot_cancel"),
+                ])
+                keyboard = InlineKeyboard(buttons=rows)
+                await im_client.send_message_with_buttons(
+                    channel_context, "📸 Select a window to capture:", keyboard
+                )
+                return
+
+            filepath = None
+            caption = ""
+
+            if not args:
+                filepath = capture_screenshot()
+                caption = "🖥 Full Screen"
+            elif args.lower() in ("window", "active", "w"):
+                filepath = capture_active_window()
+                caption = "🪟 Active Window"
+            elif args.startswith("hwnd:"):
+                hwnd = int(args.split(":", 1)[1])
+                filepath = capture_window_by_hwnd(hwnd)
+                caption = f"🪟 Window"
+            else:
+                filepath = capture_window_by_title(args)
+                caption = f"🪟 {args}"
+
+            im_client = self._get_im_client(context)
+            channel_context = self._get_channel_context(context)
+            if hasattr(im_client, "upload_image_from_path"):
+                await im_client.upload_image_from_path(
+                    channel_context,
+                    file_path=filepath,
+                    title=caption,
+                )
+            elif hasattr(im_client, "upload_file_from_path"):
+                await im_client.upload_file_from_path(
+                    channel_context,
+                    file_path=filepath,
+                    title=f"{caption}.png",
+                )
+            else:
+                await im_client.send_message(
+                    channel_context,
+                    f"📸 {caption}: {filepath}\n(File upload not supported on this platform)",
+                )
+            logger.info(f"Screenshot sent to user {context.user_id}: {filepath}")
+
+        except ScreenshotError as e:
+            logger.warning(f"Screenshot capture failed: {e}")
+            channel_context = self._get_channel_context(context)
+            await self._get_im_client(channel_context).send_message(
+                channel_context, f"❌ {e}"
+            )
+        except Exception as e:
+            logger.error(f"Error handling screenshot command: {e}", exc_info=True)
+            channel_context = self._get_channel_context(context)
+            await self._get_im_client(channel_context).send_message(
+                channel_context, f"❌ Screenshot failed: {e}"
             )
