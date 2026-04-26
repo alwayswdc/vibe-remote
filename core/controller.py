@@ -342,6 +342,7 @@ class Controller:
             "setup": self._dispatch_to_controller_loop(self.command_handler.handle_setup),
             "settings": self._dispatch_to_controller_loop(self.settings_handler.handle_settings),
             "stop": self._dispatch_to_controller_loop(self.command_handler.handle_stop),
+            "routing": self._dispatch_to_controller_loop(self.settings_handler.handle_routing),
             "bind": self._dispatch_to_controller_loop(self.command_handler.handle_bind),
             "screenshot": self._dispatch_to_controller_loop(self.command_handler.handle_screenshot),
             "window": self._dispatch_to_controller_loop(
