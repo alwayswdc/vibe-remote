@@ -112,7 +112,8 @@ _REG_VALUE_NAME = "VibeRemote"
 
 
 def _get_autostart_cmd() -> str:
-    return f'"{sys.executable}" -m vibe'
+    pythonw = str(Path(sys.executable).parent / "pythonw.exe")
+    return f'"{pythonw}" -m vibe'
 
 
 def is_autostart_enabled() -> bool:

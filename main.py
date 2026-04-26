@@ -54,6 +54,29 @@ def apply_claude_sdk_patches():
             buffer_size,
         )
 
+    # On Windows, suppress console windows from child processes (claude.exe etc.)
+    if sys.platform == "win32":
+        _patch_subprocess_no_console()
+
+
+def _patch_subprocess_no_console():
+    """Patch asyncio subprocess creation to suppress console windows on Windows."""
+    import subprocess
+    CREATE_NO_WINDOW = 0x08000000
+
+    _orig_create_subprocess_exec = asyncio.create_subprocess_exec
+
+    async def _patched_create_subprocess_exec(program, *args, **kwargs):
+        if "creationflags" not in kwargs:
+            kwargs["creationflags"] = CREATE_NO_WINDOW
+        else:
+            kwargs["creationflags"] = kwargs["creationflags"] | CREATE_NO_WINDOW
+        return await _orig_create_subprocess_exec(program, *args, **kwargs)
+
+    asyncio.create_subprocess_exec = _patched_create_subprocess_exec
+    logger = logging.getLogger(__name__)
+    logger.info("Patched asyncio.create_subprocess_exec with CREATE_NO_WINDOW")
+
 
 def main():
     """Main entry point"""
