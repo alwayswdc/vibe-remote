@@ -236,7 +236,9 @@ class BaseIMClient(ABC):
         command, args = parsed
         handler = self.on_command_callbacks.get(command)
         if not handler:
+            logger.warning("dispatch_text_command: no handler for command '%s' (registered: %s)", command, list(self.on_command_callbacks.keys()))
             return False
+        logger.info("dispatch_text_command: dispatching '%s'", command)
         await handler(context, args)
         return True
 

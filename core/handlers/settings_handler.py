@@ -394,6 +394,7 @@ class SettingsHandler(BaseHandler):
         """Handle routing command - show agent/model selection"""
         try:
             platform = context.platform or (context.platform_specific or {}).get("platform") or self.config.platform
+            logger.info("handle_routing called: platform=%s, user=%s, channel=%s", platform, context.user_id, context.channel_id)
             # Only Slack has modal support for now
             if platform == "slack":
                 await self._handle_routing_slack(context)
