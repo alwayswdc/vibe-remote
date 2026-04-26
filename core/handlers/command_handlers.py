@@ -125,6 +125,9 @@ class CommandHandlers(BaseHandler):
         if time.time() - float(snapshot.get("stored_at", 0.0)) > self._resume_snapshot_ttl_seconds:
             self._resume_snapshots.pop(self._get_resume_snapshot_key(context), None)
             return None
+        if _norm_path(snapshot.get("working_path", "")) != _norm_path(self.controller.get_cwd(context)):
+            self._resume_snapshots.pop(self._get_resume_snapshot_key(context), None)
+            return None
         return snapshot
 
     def _list_recent_native_sessions(
@@ -275,7 +278,6 @@ class CommandHandlers(BaseHandler):
             host_message_ts=context.message_id,
             is_dm=bool((context.platform_specific or {}).get("is_dm", False)),
             platform=context.platform or (context.platform_specific or {}).get("platform") or self.config.platform,
-            session_working_path=item.working_path,
         )
 
     async def _handle_wechat_resume_latest(self, context: MessageContext, *, agent: Optional[str] = None) -> None:
@@ -302,7 +304,6 @@ class CommandHandlers(BaseHandler):
             host_message_ts=context.message_id,
             is_dm=bool((context.platform_specific or {}).get("is_dm", False)),
             platform=context.platform or (context.platform_specific or {}).get("platform") or self.config.platform,
-            session_working_path=item.working_path,
         )
 
     async def _handle_wechat_resume(self, context: MessageContext, args: str) -> None:
@@ -595,17 +596,6 @@ class CommandHandlers(BaseHandler):
             if _norm_path(old_cwd) != _norm_path(absolute_path):
                 session_handler = getattr(self.controller, "session_handler", None)
                 if session_handler:
-                    session_key = session_handler._get_session_key(context)
-                    # Clear stored session working_path so resume doesn't
-                    # override the user's new cwd
-                    sessions = getattr(session_handler, "sessions", None)
-                    if sessions:
-                        sessions._set_agent_session_working_path(
-                            session_key,
-                            "claude",
-                            session_handler.get_base_session_id(context),
-                            absolute_path,
-                        )
                     # Remove cached Claude client for the old composite key
                     old_composite = f"{session_handler.get_base_session_id(context)}:{old_cwd}"
                     old_client = session_handler.claude_sessions.pop(old_composite, None)
