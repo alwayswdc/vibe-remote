@@ -610,6 +610,18 @@ class CommandHandlers(BaseHandler):
                         old_receiver.cancel()
                     session_handler.clear_session_tracking(old_composite)
 
+                # Clean up Codex and OpenCode sessions for the old scope
+                session_key = self._get_session_key(context)
+                agent_service = getattr(self.controller, "agent_service", None)
+                if agent_service:
+                    for agent_name in ("codex", "opencode"):
+                        try:
+                            agent = agent_service.agents.get(agent_name)
+                            if agent:
+                                await agent.clear_sessions(session_key)
+                        except Exception as e:
+                            logger.warning(f"Failed to clear {agent_name} sessions on cwd change: {e}")
+
             logger.info(f"User {context.user_id} changed cwd to: {absolute_path}")
 
             formatter = self._get_formatter(context)
