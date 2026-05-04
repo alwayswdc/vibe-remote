@@ -635,6 +635,16 @@ class MessageHandler(BaseHandler):
                 continue
 
             try:
+                # Telegram Bot API download limit is 20 MB
+                MAX_DOWNLOAD_SIZE = 20 * 1024 * 1024
+                if attachment.size and attachment.size > MAX_DOWNLOAD_SIZE:
+                    size_mb = attachment.size / (1024 * 1024)
+                    errors.append(
+                        f"Attachment '{attachment.name}' ({size_mb:.1f} MB) exceeds the 20 MB download limit. "
+                        f"Please split into smaller files or compress it."
+                    )
+                    continue
+
                 im_client = self._get_im_client(context)
                 # Download the file content. Some platforms receive a thin
                 # attachment event first and resolve the actual URL from
@@ -722,7 +732,7 @@ class MessageHandler(BaseHandler):
 
             except Exception as e:
                 self._cleanup_partial_attachment(locals().get("temp_path"))
-                logger.error(f"Error processing file attachment {attachment.name}: {e}")
+                logger.error(f"Error processing file attachment {attachment.name}: {e!r}", exc_info=True)
                 errors.append(f"Attachment '{attachment.name}' could not be downloaded: {e}")
                 continue
 

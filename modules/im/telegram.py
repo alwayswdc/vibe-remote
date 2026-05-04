@@ -644,6 +644,46 @@ class TelegramBot(BaseIMClient):
                     size=document.get("file_size"),
                 )
             )
+        video = message.get("video")
+        if video:
+            files.append(
+                FileAttachment(
+                    name=video.get("file_name") or "telegram-video.mp4",
+                    mimetype=video.get("mime_type") or "video/mp4",
+                    url=video.get("file_id"),
+                    size=video.get("file_size"),
+                )
+            )
+        audio = message.get("audio")
+        if audio:
+            files.append(
+                FileAttachment(
+                    name=audio.get("file_name") or "telegram-audio",
+                    mimetype=audio.get("mime_type") or "audio/mpeg",
+                    url=audio.get("file_id"),
+                    size=audio.get("file_size"),
+                )
+            )
+        voice = message.get("voice")
+        if voice:
+            files.append(
+                FileAttachment(
+                    name="telegram-voice.ogg",
+                    mimetype=voice.get("mime_type") or "audio/ogg",
+                    url=voice.get("file_id"),
+                    size=voice.get("file_size"),
+                )
+            )
+        animation = message.get("animation")
+        if animation:
+            files.append(
+                FileAttachment(
+                    name=animation.get("file_name") or "telegram-animation.mp4",
+                    mimetype=animation.get("mime_type") or "video/mp4",
+                    url=animation.get("file_id"),
+                    size=animation.get("file_size"),
+                )
+            )
         photo = message.get("photo") or []
         if photo:
             best = photo[-1]
@@ -1033,7 +1073,7 @@ class TelegramBot(BaseIMClient):
         self,
         file_info: Dict[str, Any],
         max_bytes: Optional[int] = None,
-        timeout_seconds: int = 30,
+        timeout_seconds: int = 120,
     ) -> Optional[bytes]:
         file_id = (
             file_info.get("telegram_file_id")

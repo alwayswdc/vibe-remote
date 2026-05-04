@@ -56,7 +56,7 @@ async def get_updates(bot_token: str, offset: Optional[int], timeout_seconds: in
     return await call_api(bot_token, "getUpdates", payload, timeout_seconds=timeout_seconds + 10)
 
 
-async def download_file(bot_token: str, file_path: str, *, timeout_seconds: int = 60) -> bytes:
+async def download_file(bot_token: str, file_path: str, *, timeout_seconds: int = 120) -> bytes:
     timeout = aiohttp.ClientTimeout(total=timeout_seconds)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.get(_file_url(bot_token, file_path)) as resp:
