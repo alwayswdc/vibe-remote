@@ -1,3 +1,5 @@
+import ctypes
+import ctypes.wintypes
 import os
 import time
 import logging

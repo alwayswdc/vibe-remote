@@ -16,6 +16,7 @@ from typing import cast
 
 PACKAGE_NAME = "vibe-remote"
 DEFAULT_UPDATE_METADATA_URL = f"https://pypi.org/pypi/{PACKAGE_NAME}/json"
+FORK_PACKAGE_SPEC = "vibe-remote @ git+https://github.com/alwayswdc/vibe-remote.git"
 CURRENT_VIBE_EXECUTABLE_ENV = "VIBE_CURRENT_EXECUTABLE"
 UV_FALLBACK_BIN_DIRS = (".local/bin", ".cargo/bin")
 _VERSION_RE = re.compile(
@@ -226,7 +227,7 @@ def get_update_metadata_url() -> str:
 
 
 def get_upgrade_package_spec() -> str:
-    return os.environ.get("VIBE_UPGRADE_PACKAGE_SPEC", PACKAGE_NAME)
+    return os.environ.get("VIBE_UPGRADE_PACKAGE_SPEC", FORK_PACKAGE_SPEC)
 
 
 def _normalize_release_parts(parts: tuple[int, ...]) -> tuple[int, ...]:
